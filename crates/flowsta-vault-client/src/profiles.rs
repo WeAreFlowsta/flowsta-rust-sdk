@@ -401,8 +401,8 @@ mod tests {
             .lines()
             .map(|l| match l.split_once(": ") {
                 Some(("connectionUrl", _)) => format!("connectionUrl: unix://{}/socket?k=abc", dir.display()),
-                Some(("pidFile", _)) => format!("pidFile: {}/pid_file", dir.display()),
-                Some(("storeFile", _)) => format!("storeFile: {}/store_file", dir.display()),
+                Some(("pidFile", _)) => format!("pidFile: {}", dir.join("pid_file").display()),
+                Some(("storeFile", _)) => format!("storeFile: {}", dir.join("store_file").display()),
                 _ => l.to_string(),
             })
             .collect::<Vec<_>>()
