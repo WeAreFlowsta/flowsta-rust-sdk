@@ -18,7 +18,7 @@ folder and name that is the app's own is passed in.
 
 | Module | What it does |
 |---|---|
-| `vault` | Finds the person's Flowsta Vault among the ports it can listen on, ignores a Vault that belongs to another user account of the same computer, and prefers the unlocked one. Opens the Vault app when it is installed and not running. |
+| `vault` | Finds the person's Flowsta Vault among the ports it can listen on, ignores a Vault that belongs to another user account of the same computer, and prefers the unlocked one. Says which app each call is from (its origin, client id and link token). Opens the Vault app when it is installed and not running. |
 | `identity` | The link between this install and the person's Flowsta identity, kept on the device, and the two checks a write goes through: everyday writes work with the Vault locked or closed; the few that copy from the live Vault need it open as the same identity. |
 | `device_seed` | The seed of the app's device key, kept in a file so a Vault backup can carry it and a new device can carry on as the same key. |
 | `adopt` | Replacing the device key in an order that cannot leave it half done, and the check that stops a backup from overwriting a key the person still needs. |
@@ -32,11 +32,17 @@ flowsta-vault-client = { git = "https://github.com/WeAreFlowsta/flowsta-rust-sdk
 ```rust
 use flowsta_vault_client::{identity, vault, VaultClient, VaultConfig};
 
-// The origin your webview presents; the Vault knows your app by it.
+// An origin of your app's own, and its Flowsta client id.
 let vault = VaultClient::new(VaultConfig {
-    origin: vault::tauri_origin(tauri::is_dev(), "http://localhost:5173"),
+    origin: "yourapp://app".into(),
     only_port: None,
+    client_id: Some("your_client_id".into()),
 })?;
+
+// The link token the Vault gave when the person linked your app. Your app
+// keeps it in its own storage and sets it at each start, and again after
+// each sign-in; `None` forgets it.
+vault.set_link_token(stored_link_token);
 
 // Is the person's Vault there, and unlocked as whom?
 if let Some(found) = vault.find(std::time::Duration::from_secs(2)).await {
@@ -54,6 +60,49 @@ The sign-in itself (the person approving the link in their Vault) is done
 from the webview with [`@flowsta/auth`](https://github.com/WeAreFlowsta/flowsta-sdk);
 this crate keeps what that sign-in produced and checks it.
 
+### Which app a call is from
+
+The Vault tells apps apart by three things a call presents:
+
+- **The origin.** The Vault records the origin a link was made from. Calls
+  made from Rust should present an origin of the app's own, for example
+  `yourapp://app`.
+- **The link token.** The Vault gives one in its answer when the person
+  links the app (`link_token`), and from then on it names that one link,
+  whatever else presents the same origin. It is accepted only from the
+  origin the link was made from. Hand it to `set_link_token`; clones of
+  the client share it.
+- **The client id.** Without a token, it picks your app among several that
+  present one origin.
+
+`vault.get(url)` and `vault.post(url, body)` add the token and the client
+id to a call when they are known: query parameters on a GET, fields of the
+JSON body on a POST. `find`, `live_identity` and the backup read in `adopt`
+go through them. A Vault from before link tokens ignores both, so nothing
+changes there. `vault.http()` is the plain client, with the origin only.
+
+**When the link is made from the webview** (the usual case with
+`@flowsta/auth`), the Vault recorded the webview's origin, and a token made
+there is accepted only from that origin. The Rust side then has to present
+the same origin as the webview: that is what `vault::tauri_origin` is for.
+
+```rust
+let vault = VaultClient::new(VaultConfig {
+    origin: vault::tauri_origin(tauri::is_dev(), "http://localhost:5173"),
+    only_port: None,
+    client_id: Some("your_client_id".into()),
+})?;
+```
+
+Every Tauri app's webview presents that same origin, so an app that uses it
+should always set its client id and its link token.
+
+When the Vault refuses a call because of who it is from, its answer is a
+403 with an `error` code that `vault::Refused` reads: `invalid_link_token`
+(the link is gone or was made again: forget the token and sign in again),
+`link_token_required`, `app_ambiguous` (send the client id),
+`origin_not_registered` and `not_addressed_here`.
+
 ### Not here yet
 
 - The record the sign-in writes on the app's Holochain network, and reading
@@ -64,8 +113,13 @@ this crate keeps what that sign-in produced and checks it.
 
 ## Status
 
-Version 0.1, moved here from ProofPoll, which uses it. The API can still
-change before 1.0; pin a commit.
+Version 0.2. The API can still change before 1.0; pin a commit.
+
+Since 0.1: `VaultConfig` has a new field, `client_id` (add
+`client_id: None` to keep an app as it was); `VaultClient` carries a link
+token (`set_link_token`, `link_token`) and has `get` and `post`, which say
+which app a call is from; `vault::Refused` names the Vault's refusals about
+that.
 
 ## License
 

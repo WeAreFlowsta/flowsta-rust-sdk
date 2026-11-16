@@ -248,20 +248,23 @@ pub fn classify_escrow_payload(data: &serde_json::Value) -> Result<EscrowedSeed,
 
 /// The app's backup in the person's Vault.
 pub struct VaultEscrowProbe {
+    /// The client the request goes through: its origin, and its link token
+    /// when it has one.
     pub vault: VaultClient,
     /// The app's Flowsta client id.
     pub client_id: String,
 }
 
 impl VaultEscrowProbe {
-    /// The app's backup payload in the linked Vault; None when there is none.
+    /// The app's backup payload in the linked Vault; None when there is
+    /// none. An error is the Vault's own `error` code when it gave one
+    /// ([`crate::vault::Refused::from_code`] reads the ones about the
+    /// app's link).
     pub async fn retrieve(&self) -> Result<Option<serde_json::Value>, String> {
         let resp = self
             .vault
-            .http()
-            .post(format!("{}/backup/retrieve", self.vault.base_url().await))
+            .post(&format!("{}/backup/retrieve", self.vault.base_url().await), serde_json::json!({ "client_id": self.client_id }))
             .timeout(std::time::Duration::from_secs(5))
-            .json(&serde_json::json!({ "client_id": self.client_id }))
             .send()
             .await
             .map_err(|e| format!("vault unreachable: {}", e))?;
@@ -561,6 +564,56 @@ mod tests {
         let p = ScriptedProbe::one(Err("vault unreachable".into()));
         let err = backup_escrow_gate(&p, Ok(Some(seed("aa")))).await.unwrap_err().to_string();
         assert!(err.contains("never write"), "{}", err);
+    }
+
+    // ── The Vault's side ────────────────────────────────────────────────
+
+    use crate::vault::{test_vault, Refused, VaultConfig};
+    use serde_json::json;
+
+    fn probe_of(vault: &test_vault::TestVault) -> VaultEscrowProbe {
+        let client = VaultClient::new(VaultConfig { origin: "testapp://app".into(), only_port: Some(vault.port), client_id: Some("of_the_client".into()) }).unwrap();
+        VaultEscrowProbe { vault: client, client_id: "flowsta_app_1".into() }
+    }
+
+    fn status_or(seen: &test_vault::Seen, retrieve: (u16, serde_json::Value)) -> (u16, serde_json::Value) {
+        match seen.path() {
+            "/status" => (200, json!({ "unlocked": true, "initialized": true })),
+            _ => retrieve,
+        }
+    }
+
+    #[tokio::test]
+    async fn retrieve_names_the_app_and_carries_the_token_once_there_is_one() {
+        // What a Vault from before link tokens answers.
+        let vault = test_vault::start(|seen| status_or(seen, (200, json!({ "success": true, "data": { "app_keys": { "device_seed_hex": "ab" } }, "created_at": 1 }))));
+        let probe = probe_of(&vault);
+
+        assert_eq!(probe.retrieve().await.unwrap(), Some(json!({ "app_keys": { "device_seed_hex": "ab" } })));
+        probe.vault.set_link_token(Some("tok-1".into()));
+        assert!(matches!(probe.escrowed_seed().await, Ok(EscrowedSeed::Seed(s)) if s == "ab"));
+
+        let sent = vault.seen_on("/backup/retrieve");
+        assert_eq!(sent[0].body, json!({ "client_id": "flowsta_app_1" }), "before a token: the body an older SDK sent");
+        assert_eq!(sent[1].body, json!({ "client_id": "flowsta_app_1", "link_token": "tok-1" }));
+        assert!(sent.iter().all(|s| s.method == "POST" && s.target == "/backup/retrieve" && s.origin.as_deref() == Some("testapp://app")));
+    }
+
+    #[tokio::test]
+    async fn retrieve_reads_no_backup_and_the_vaults_refusals() {
+        let none = test_vault::start(|seen| status_or(seen, (404, json!({ "error": "not_found" }))));
+        assert_eq!(probe_of(&none).retrieve().await, Ok(None));
+        assert!(matches!(probe_of(&none).escrowed_seed().await, Ok(EscrowedSeed::NoBackup)));
+
+        let older = test_vault::start(|seen| status_or(seen, (403, json!({ "error": "not_linked", "description": "This origin is not a linked third-party app." }))));
+        let err = probe_of(&older).retrieve().await.unwrap_err();
+        assert_eq!((err.as_str(), Refused::from_code(&err)), ("not_linked", None));
+
+        let refused = test_vault::start(|seen| status_or(seen, (403, json!({ "error": "invalid_link_token" }))));
+        let err = probe_of(&refused).retrieve().await.unwrap_err();
+        assert_eq!(Refused::from_code(&err), Some(Refused::InvalidLinkToken));
+        let held = backup_escrow_gate(&probe_of(&refused), Ok(Some(seed("aa")))).await.unwrap_err();
+        assert_eq!(held, Held::CheckFailed("invalid_link_token".into()), "a refused read never lets a backup through");
     }
 
     #[test]
