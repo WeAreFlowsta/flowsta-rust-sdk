@@ -378,6 +378,53 @@ pub fn select_profile_root(device_root: &Path, live_identity: Option<&str>, layo
     root
 }
 
+/// The profile for an identity the app is not connected under yet.
+///
+/// The Vault names the identity it holds only to an app connected under
+/// it. When it is unlocked and names none, and the person asks to open the
+/// app as the identity the Vault holds now, this is the profile to run: the
+/// one no identity is bound to if there is one, else a new, empty one
+/// (`local`, or `local-2`, `local-3`... when earlier ones are bound). It
+/// binds to the identity the first time it links, like any other. Every
+/// other profile is left as it is, and [`select_profile_root`] returns to
+/// one of them when the Vault names its identity again.
+///
+/// An install still on the layout from before profiles is handled by
+/// [`select_profile_root`] first (it moves that layout into a profile).
+pub fn select_unbound_profile_root(device_root: &Path, layout: &Layout) -> PathBuf {
+    if legacy_layout_present(device_root, layout) {
+        let moved = select_profile_root(device_root, None, layout);
+        if moved == device_root {
+            return moved;
+        }
+    }
+    let mut profiles = Profiles::load(device_root);
+    let folder = profiles.unbound_folder().unwrap_or_else(|| {
+        let mut n = 1;
+        loop {
+            let name = if n == 1 { LOCAL_PROFILE.to_string() } else { format!("{LOCAL_PROFILE}-{n}") };
+            if !profiles.profiles.contains_key(&name) && !profile_root(device_root, &name).exists() {
+                break name;
+            }
+            n += 1;
+        }
+    });
+    let root = profile_root(device_root, &folder);
+    let fallback = |why: String| {
+        log::warn!("{why} - staying on the profile in use");
+        select_profile_root(device_root, None, layout)
+    };
+    if !lair_socket_path_fits(&root) {
+        return fallback(format!("Profile path {:?} too long for the key store socket", root));
+    }
+    if let Err(e) = std::fs::create_dir_all(&root) {
+        return fallback(format!("cannot create profile {:?}: {}", root, e));
+    }
+    profiles.touch(&folder, None);
+    if let Err(e) = profiles.save(device_root) { log::warn!("profiles.json not saved: {}", e); }
+    root
+}
+
 /// Record that the profile at `profile_root` now belongs to `agent_pub_key`
 /// (called when an identity link is saved).
 pub fn bind_profile(device_root: &Path, profile_root_path: &Path, agent_pub_key: &str) {
@@ -560,5 +607,45 @@ mod tests {
         assert_eq!(select_profile_root(root, None, &L), profile_root(root, LOCAL_PROFILE));
         let dir2 = tempfile::tempdir().unwrap();
         assert_eq!(select_profile_root(dir2.path(), Some(KEY_B), &L), profile_root(dir2.path(), &partition_key(KEY_B).unwrap()));
+    }
+
+    #[test]
+    fn an_unbound_profile_is_new_beside_the_bound_ones_and_reused_until_it_links() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        // The first profile, `local`, linked to A.
+        let a = select_profile_root(root, None, &L);
+        assert_eq!(a, profile_root(root, LOCAL_PROFILE));
+        std::fs::write(a.join("mine"), b"a").unwrap();
+        bind_profile(root, &a, KEY_A);
+
+        // The Vault holds an identity it does not name: a new, empty profile.
+        let fresh = select_unbound_profile_root(root, &L);
+        assert_eq!(fresh, profile_root(root, "local-2"));
+        assert!(fresh.is_dir() && std::fs::read_dir(&fresh).unwrap().next().is_none());
+        assert!(a.join("mine").exists(), "the bound profile is untouched");
+        let index = Profiles::load(root);
+        assert_eq!(index.active.as_deref(), Some("local-2"));
+        assert_eq!(index.folder_for_identity(KEY_A).as_deref(), Some(LOCAL_PROFILE));
+
+        // Asked again before it links: the same one, never a third.
+        assert_eq!(select_unbound_profile_root(root, &L), fresh);
+        // A start with no identity named keeps the profile in use.
+        assert_eq!(select_profile_root(root, None, &L), fresh);
+        // The Vault names A again: A's profile.
+        assert_eq!(select_profile_root(root, Some(KEY_A), &L), a);
+
+        // It links to B and is B's from then on.
+        bind_profile(root, &fresh, KEY_B);
+        assert_eq!(select_profile_root(root, Some(KEY_B), &L), fresh);
+        assert_eq!(select_profile_root(root, Some(KEY_A), &L), a);
+        // A third identity the Vault does not name: another new one.
+        assert_eq!(select_unbound_profile_root(root, &L), profile_root(root, "local-3"));
+    }
+
+    #[test]
+    fn an_unbound_profile_on_a_new_install_is_the_first_profile() {
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(select_unbound_profile_root(dir.path(), &L), profile_root(dir.path(), LOCAL_PROFILE));
     }
 }
