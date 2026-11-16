@@ -57,8 +57,11 @@ match identity::require_identity_link(&vault, &profile_dir).await {
 ```
 
 The sign-in itself (the person approving the link in their Vault) is done
-from the webview with [`@flowsta/auth`](https://github.com/WeAreFlowsta/flowsta-sdk);
+from the webview with `linkFlowstaIdentity` from
+[`@flowsta/holochain`](https://github.com/WeAreFlowsta/flowsta-sdk);
 this crate keeps what that sign-in produced and checks it.
+
+How-tos for each module: [docs.flowsta.com/sdk/vault-client](https://docs.flowsta.com/sdk/vault-client).
 
 ### Which app a call is from
 
@@ -82,7 +85,7 @@ go through them. A Vault from before link tokens ignores both, so nothing
 changes there. `vault.http()` is the plain client, with the origin only.
 
 **When the link is made from the webview** (the usual case with
-`@flowsta/auth`), the Vault recorded the webview's origin, and a token made
+`@flowsta/holochain`), the Vault recorded the webview's origin, and a token made
 there is accepted only from that origin. The Rust side then has to present
 the same origin as the webview: that is what `vault::tauri_origin` is for.
 
