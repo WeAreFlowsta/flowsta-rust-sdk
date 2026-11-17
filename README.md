@@ -116,13 +116,17 @@ When the Vault refuses a call because of who it is from, its answer is a
 
 ## Status
 
-Version 0.2. The API can still change before 1.0; pin a commit.
+Version 0.2.1. The API can still change before 1.0; pin a commit.
 
 Since 0.1: `VaultConfig` has a new field, `client_id` (add
 `client_id: None` to keep an app as it was); `VaultClient` carries a link
 token (`set_link_token`, `link_token`) and has `get` and `post`, which say
 which app a call is from; `vault::Refused` names the Vault's refusals about
 that.
+
+0.2.1 adds `profiles::select_unbound_profile_root`: the profile to open when
+the person asks for the app as an identity the Vault holds and does not
+name yet (it names its identity only to an app connected under it).
 
 ## License
 
