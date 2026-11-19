@@ -13,8 +13,11 @@
 //! - [`adopt`]: replacing the device key in a safe order, and the check
 //!   that keeps a backup from overwriting a key still needed.
 //! - [`profiles`]: one profile folder per identity.
+//! - [`app_secret`]: a secret that is the same on every one of the
+//!   person's devices, for a private network of their own devices.
 
 pub mod adopt;
+pub mod app_secret;
 pub mod device_seed;
 pub mod identity;
 pub mod profiles;

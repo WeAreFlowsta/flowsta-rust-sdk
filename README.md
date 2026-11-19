@@ -23,6 +23,7 @@ folder and name that is the app's own is passed in.
 | `device_seed` | The seed of the app's device key, kept in a file so a Vault backup can carry it and a new device can carry on as the same key. |
 | `adopt` | Replacing the device key in an order that cannot leave it half done, and the check that stops a backup from overwriting a key the person still needs. |
 | `profiles` | One profile folder per Flowsta identity, so two people (or one person's two identities) on one install never share keys or data. |
+| `app_secret` | A secret the Vault gives this app that is the same on every one of the person's devices and different for every app and every person. Used as a DNA's network seed, it makes a private network that only that person's devices join. |
 
 ```toml
 [dependencies]
@@ -106,6 +107,25 @@ When the Vault refuses a call because of who it is from, its answer is a
 `link_token_required`, `app_ambiguous` (send the client id),
 `origin_not_registered` and `not_addressed_here`.
 
+### A private network of the person's own devices
+
+```rust
+use flowsta_vault_client::app_secret::{network_secret, DEFAULT_LABEL};
+
+let secret = network_secret(&vault, "My App", DEFAULT_LABEL).await?;
+// install the private DNA with `secret.hex()` as its network seed
+```
+
+The Vault derives the secret from the person's identity, so every device
+they sign in on gets the same one with nothing copied between devices.
+Give each device its own key on that network. The Vault must be unlocked
+and the app linked; `AppSecretError` names each reason it can refuse
+(`VaultLocked`, `NotLinked`, `IdentityMismatch`, ...). A secret an identity
+already uses, kept in a Vault backup under the same label, is returned in
+preference, so the network seed never changes under a person's data.
+`app_secret::derived` is the plain call for any other label, for example a
+data key.
+
 ### Not here yet
 
 - The record the sign-in writes on the app's Holochain network, and reading
@@ -116,7 +136,7 @@ When the Vault refuses a call because of who it is from, its answer is a
 
 ## Status
 
-Version 0.2.1. The API can still change before 1.0; pin a commit.
+Version 0.2.2. The API can still change before 1.0; pin a commit.
 
 Since 0.1: `VaultConfig` has a new field, `client_id` (add
 `client_id: None` to keep an app as it was); `VaultClient` carries a link
@@ -127,6 +147,9 @@ that.
 0.2.1 adds `profiles::select_unbound_profile_root`: the profile to open when
 the person asks for the app as an identity the Vault holds and does not
 name yet (it names its identity only to an app connected under it).
+
+0.2.2 adds `app_secret`: the Vault's per-app secret (`network_secret`,
+`derived`), for a private network of the person's own devices.
 
 ## License
 
